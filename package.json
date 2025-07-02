@@ -1,0 +1,41 @@
+{
+  "name": "praktika_3_kurs",
+  "version": "1.0.0",
+  "description": "",
+  "main": "app.js",
+  "type": "module",
+  "scripts": {
+    "start": "node app.js",
+    "dev": "nodemon app.js",
+    "create:superuser": "node scripts/create-superuser.js",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "migrate": "sequelize-cli db:migrate",
+    "migrate:undo": "sequelize-cli db:migrate:undo:all",
+    "migrate:create": "sequelize-cli migration:generate --name"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aksnvch/praktika_3_kurs.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/aksnvch/praktika_3_kurs/issues"
+  },
+  "homepage": "https://github.com/aksnvch/praktika_3_kurs#readme",
+  "dependencies": {
+    "axios": "^1.10.0",
+    "dotenv": "^16.5.0",
+    "express": "^5.1.0",
+    "pg": "^8.16.2",
+    "sequelize": "^6.37.7",
+    "sequelize-cli": "^6.6.3",
+    "sqlite3": "^5.1.7",
+    "telegraf": "^4.16.3",
+    "telegraf-ratelimit": "^2.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10"
+  }
+}

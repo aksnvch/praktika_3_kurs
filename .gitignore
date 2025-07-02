@@ -1,0 +1,18 @@
+# Папка с зависимостями, устанавливаемыми через npm
+node_modules/
+
+# Лог-файлы
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Файлы операционной системы
+.DS_Store
+Thumbs.db
+
+# Файлы сред разработки (IDE)
+.idea/
+.vscode/
+
+# Файлы окружения с секретными данными
+.env
