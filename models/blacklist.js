@@ -1,23 +1,20 @@
-const { DataTypes } = require('sequelize');
+import { Model, DataTypes } from 'sequelize';
 
-module.exports = (sequelize) => {
-  return sequelize.define('Blacklist', {
-    id: {
-      type: DataTypes.INTEGER,
-      primaryKey: true,
-      autoIncrement: true,
-    },
-    telegramId: {
-      type: DataTypes.BIGINT,
-      allowNull: false,
-      unique: true,
-    },
-    reason: {
-      type: DataTypes.STRING,
-    },
-    createdAt: {
-      type: DataTypes.DATE,
-      defaultValue: DataTypes.NOW,
-    },
+export default class Blacklist extends Model {
+  static associate(models) {
+  }
+}
+
+export const initBlacklistModel = (sequelize) => {
+  Blacklist.init({
+    id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+    telegramId: { type: DataTypes.BIGINT, allowNull: false, unique: true },
+    reason: { type: DataTypes.STRING },
+  }, {
+    sequelize,
+    modelName: 'Blacklist',
+    timestamps: true,
+    updatedAt: false,
   });
+  return Blacklist;
 };

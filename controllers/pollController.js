@@ -1,141 +1,67 @@
-// ЗАМЕНИТЬ СОДЕРЖИМОЕ ФАЙЛА /controllers/pollController.js
+import pollService from '../services/pollService.js';
 
-const { Poll, Vote } = require('../models');
-
-module.exports = {
-  createPoll: async (telegramPollId, question, options, type, correctOption, chatId, messageId) => {
-    try {
-      const poll = await Poll.create({
-        id: String(telegramPollId),
-        question,
-        options: options.reduce((acc, text, index) => ({ ...acc, [index]: { text, votes: 0 } }), {}),
-        type,
-        correctOption,
-        isActive: true,
-        chatId: String(chatId),
-        messageId: String(messageId),
-      });
-      console.log(`Poll ${telegramPollId} saved to DB from chat ${chatId}.`);
-      return poll;
-    } catch (error) {
-      console.error('Poll creation error in controller:', error);
-      throw error;
-    }
-  },
-
-  getPoll: async (pollId) => {
-    return await Poll.findByPk(String(pollId));
-  },
-
-  getAllPolls: async () => {
-    return await Poll.findAll({ order: [['createdAt', 'DESC']] });
-  },
-
-  // --- НОВАЯ ФУНКЦИЯ ---
-  deletePoll: async (pollId) => {
-    try {
-        const poll = await Poll.findByPk(String(pollId));
-        if (poll) {
-            await poll.destroy();
-            console.log(`Poll ${pollId} deleted from DB.`);
-            return true;
+class PollController {
+    async getAllPolls(req, res, next) {
+        try {
+          const polls = await pollService.getAllPolls();
+          return res.json(polls); 
+        } catch (error) {
+          next(error);
         }
-        return false;
-    } catch (error) {
-        console.error(`Error deleting poll ${pollId}:`, error);
-        throw error;
-    }
-  },
-  // ---------------------
-
-  updatePollStats: async (pollId, votes, isClosed = false) => {
-    try {
-      const poll = await Poll.findByPk(String(pollId));
-      if (!poll) {
-        console.log(`[updatePollStats] Poll ${pollId} not found in DB. Skipping.`);
-        return;
       }
-  
-      let optionsChanged = false;
-      let statusChanged = false;
-  
-      if (votes && votes.length > 0) {
-        const currentOptions = poll.get('options', { plain: true });
-        
-        votes.forEach((count, index) => {
-          if (currentOptions[index] && currentOptions[index].votes !== count) {
-            currentOptions[index].votes = count;
-            optionsChanged = true;
+
+      async getPoll(req, res, next) {
+        try {
+          const poll = await pollService.getPoll(req.params.id);
+          return res.json(poll); 
+        } catch (error) {
+          next(error);
+        }
+      }
+
+      async getPollStats(req, res, next) {
+        try {
+          const stats = await pollService.getPollStats(req.params.id);
+          return res.json(stats); 
+        } catch (error) {
+          next(error);
+        }
+      }
+
+      async createPoll(req, res, next) {
+        try {
+          const { question, options, type = 'anonymous' } = req.body;
+          if (!question || !options || !Array.isArray(options) || options.length < 2) {
+            return res.status(400).json({ message: 'Question and at least 2 options are required' });
           }
-        });
-  
-        if (optionsChanged) {
-          poll.options = currentOptions;
+    
+          const fakeTelegramId = `api-${Date.now()}`;
+          const poll = await pollService.createPoll(
+            fakeTelegramId, question, options, type, null, 'api_chat', 'api_message'
+          );
+          return res.status(201).json(poll); 
+        } catch (error) {
+          next(error);
         }
       }
   
-      if (isClosed && poll.isActive) {
-        poll.isActive = false;
-        statusChanged = true;
+      async updatePoll(req, res, next) {
+        try {
+          const updatedPoll = await pollService.updatePoll(req.params.id, req.body);
+          return res.json(updatedPoll); 
+        } catch (error) {
+          next(error);
+        }
       }
       
-      if (optionsChanged || statusChanged) {
-        if (optionsChanged) {
-          poll.changed('options', true);
+      async deletePoll(req, res, next) {
+        try {
+          await pollService.deletePoll(req.params.id);
+          return res.status(204).end(); 
+        } catch (error) {
+          next(error);
         }
-        
-        await poll.save(); 
-        console.log(`[SAVED] Stats for poll ${pollId}. Options changed: ${optionsChanged}, Status changed: ${statusChanged}`);
       }
-  
-    } catch (error) {
-      console.error(`Error updating poll stats for poll ${pollId}:`, error);
-      throw error;
     }
-  },
 
-  getPollStats: async (pollId) => {
-    const poll = await Poll.findByPk(String(pollId));
-    if (!poll) throw new Error('Poll not found');
-
-    const optionsArray = Object.values(poll.options).map((value, index) => ({
-      index, text: value.text, votes: value.votes || 0,
-    }));
-
-    const totalVotes = optionsArray.reduce((sum, opt) => sum + opt.votes, 0);
-
-    return {
-      question: poll.question, options: optionsArray, totalVotes,
-      type: poll.type, isActive: poll.isActive, correctOption: poll.correctOption
-    };
-  },
-
-  recordUserVote: async (pollId, userId, optionIndex) => {
-    try {
-        const [vote, created] = await Vote.findOrCreate({
-            where: { pollId: String(pollId), userId: String(userId) },
-            defaults: { optionIndex }
-        });
-        if (!created) {
-            await vote.update({ optionIndex });
-            console.log(`User ${userId} changed vote in poll ${pollId} to option ${optionIndex}.`);
-        } else {
-            console.log(`User ${userId} voted in poll ${pollId} for option ${optionIndex}.`);
-        }
-        return vote;
-    } catch (error) {
-        if (error.name === 'SequelizeUniqueConstraintError') {
-            console.log(`Duplicate vote attempt by user ${userId} for poll ${pollId}. Ignored.`);
-            return null;
-        }
-        console.error('Error recording vote:', error);
-        throw error;
-    }
-  },
-
-  checkUserVote: async (pollId, userId) => {
-    return await Vote.findOne({
-        where: { pollId: String(pollId), userId: String(userId) }
-    });
-  }
-};
+export default new PollController();

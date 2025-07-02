@@ -1,68 +1,68 @@
-const express = require('express');
-const bodyParser = require('body-parser');
-const { sequelize } = require('./models');
-const apiRoutes = require('./routes/api');
-const botRoutes = require('./routes/bot');
-const botService = require('./services/botService');
-const config = require('./config/bot');
+import 'dotenv/config'; 
+import express from 'express';
+import db from './models/index.js';
+const { sequelize } = db;
+import apiRoutes from './routes/api.js';
+import botRoutes from './routes/bot.js';
+import botService from './services/botService.js';
+import config from './config/bot.js';
 
 const app = express();
 
-// Middleware
-app.use(bodyParser.json());
+app.use(express.json());
 
-// Routes
-app.use(apiRoutes);
-app.use(botRoutes);
+app.use('/api', apiRoutes); 
+app.use(botRoutes); 
 
-// Database synchronization
 sequelize.sync({ alter: true })
   .then(() => {
     console.log('Database synchronized');
-    // Только после этого запускаем бота
+
     if (process.env.NODE_ENV !== 'test') {
       if (config.webhookUrl) {
-        botService.bot.telegram.setWebhook(`${config.webhookUrl}/webhook`);
+        const webhookPath = botService.bot.secretPathComponent();
+        botService.bot.telegram.setWebhook(`${config.webhookUrl}/webhook/${webhookPath}`);
+        console.log(`Webhook set to ${config.webhookUrl}/webhook/${webhookPath}`);
       } else {
         botService.start();
       }
     }
-  });
+  })
+  .catch(err => console.error('Database sync error:', err));
 
-  // В app.js после sequelize.sync
-const { User } = require('./models');
-
-async function ensureAdmin(telegramId) {
-  const [user] = await User.findOrCreate({
-    where: { telegramId },
-    defaults: { isAdmin: true }
-  });
-  
-  if (!user.isAdmin) {
-    await user.update({ isAdmin: true });
-  }
-}
-
-ensureAdmin(853826600); 
-
-// Error handling
 app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).send('Something broke!');
 });
 
 const PORT = process.env.PORT || 3000;
+
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+
+  const statusCode = err.statusCode || 500;
+  const message = statusCode === 500 ? 'Internal Server Error' : err.message;
+
+  return res.status(statusCode).json({
+    status: 'error',
+    message: message
+  });
+});
+
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
 
-// Graceful shutdown
-process.on('SIGINT', () => {
+process.on('SIGINT', async () => {
+  console.log('SIGINT received. Shutting down gracefully...');
   botService.stop();
-  sequelize.close().then(() => {
-    console.log('Database connection closed');
-    process.exit(0);
-  });
+  try {
+    await sequelize.close();
+    console.log('Database connection closed.');
+  } catch (error) {
+    console.error('Error closing database connection:', error);
+  }
+  process.exit(0);
 });
 
-module.exports = app;
+export default app; 

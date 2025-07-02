@@ -1,71 +1,39 @@
-const { User } = require('../models');
-const { Blacklist } = require('../models');
-const pollController = require('./pollController');
+import adminService from '../services/adminService.js';
 
-module.exports = {
-  addAdmin: async (telegramId) => {
-    try {
-      const [user, created] = await User.findOrCreate({
-        where: { telegramId },
-        defaults: {
-          isAdmin: true,
-          createdAt: new Date(),
-          updatedAt: new Date()
+class AdminController {
+    async getBlacklist(req, res, next) {
+        try {
+            const blacklist = await adminService.getBlacklist();
+            return res.json(blacklist); 
+        } catch (error) {
+            next(error);
         }
-      });
-
-      if (!created && !user.isAdmin) {
-        await user.update({ isAdmin: true });
-      }
-
-      return user;
-    } catch (error) {
-      console.error('Error in addAdmin:', error);
-      throw error;
     }
-  },
 
-  removeAdmin: async (telegramId) => {
-    const user = await User.findOne({ where: { telegramId } });
-    if (!user) throw new Error('User not found');
-
-    user.isAdmin = false;
-    await user.save();
-    return user;
-  },
-
-  addToBlacklist: async (telegramId, reason) => {
-    // Проверка, чтобы не добавить дубликат
-    const [user, created] = await Blacklist.findOrCreate({
-      where: { telegramId: String(telegramId) },
-      defaults: { reason }
-    });
-    if (!created) { // Если пользователь уже был, обновим причину
-        await user.update({ reason });
+    async addToBlacklist(req, res, next) {
+        try {
+            const { telegramId, reason } = req.body;
+            if (!telegramId || !reason) {
+                return res.status(400).json({ message: 'Telegram ID and reason are required' });
+            }
+            const [user, created] = await adminService.addToBlacklist(telegramId, reason);
+            return res.status(created ? 201 : 200).json(user); 
+        } catch (error) {
+            next(error);
+        }
     }
-    return user;
-  },
 
-  removeFromBlacklist: async (telegramId) => {
-    const user = await Blacklist.findOne({ where: { telegramId: String(telegramId) } });
-    if (user) {
-      await user.destroy();
-      return true;
+    async removeFromBlacklist(req, res, next) {
+        try {
+            const success = await adminService.removeFromBlacklist(req.params.telegramId);
+            if (!success) {
+                return res.status(404).json({ message: 'User not found in blacklist' });
+            }
+            return res.status(204).end(); 
+        } catch (error) {
+            next(error);
+        }
     }
-    return false;
-  },
+}
 
-  getBlacklist: async () => {
-    return await Blacklist.findAll();
-  },
-
-  isAdmin: async (telegramId) => {
-    const user = await User.findOne({ where: { telegramId } });
-    return user && user.isAdmin;
-  },
-
-  checkBlacklist: async (userId) => {
-    return await Blacklist.findOne({ where: { telegramId: String(userId) } });
-  },
-
-};
+export default new AdminController();

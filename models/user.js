@@ -1,39 +1,22 @@
-const { DataTypes } = require('sequelize');
+import { Model, DataTypes } from 'sequelize';
 
-module.exports = (sequelize) => {
-  return sequelize.define('User', {
-    id: {
-      type: DataTypes.INTEGER,
-      primaryKey: true,
-      autoIncrement: true,
-    },
-    telegramId: {
-      type: DataTypes.BIGINT,
-      allowNull: false,
-      unique: true,
-    },
-    username: {
-      type: DataTypes.STRING,
-    },
-    firstName: {
-      type: DataTypes.STRING,
-    },
-    lastName: {
-      type: DataTypes.STRING,
-    },
-    isAdmin: {
-      type: DataTypes.BOOLEAN,
-      defaultValue: false,
-    },
-    createdAt: {
-      type: DataTypes.DATE,
-      allowNull: false,
-      defaultValue: sequelize.literal('CURRENT_TIMESTAMP')
-    },
-    updatedAt: {
-      type: DataTypes.DATE,
-      allowNull: false,
-      defaultValue: sequelize.literal('CURRENT_TIMESTAMP')
-    },
+export default class User extends Model {
+  static associate(models) {
+  }
+}
+
+export const initUserModel = (sequelize) => {
+  User.init({
+    id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+    telegramId: { type: DataTypes.BIGINT, allowNull: false, unique: true },
+    username: { type: DataTypes.STRING },
+    firstName: { type: DataTypes.STRING },
+    lastName: { type: DataTypes.STRING },
+    isAdmin: { type: DataTypes.BOOLEAN, defaultValue: false },
+  }, {
+    sequelize,
+    modelName: 'User',
+    timestamps: true,
   });
+  return User;
 };

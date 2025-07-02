@@ -1,10 +1,10 @@
-const express = require('express');
-const router = express.Router();
-const botService = require('../services/botService');
+import { Router } from 'express';
+import botService from '../services/botService.js';
 
-// Webhook endpoint for Telegram
+const router = Router();
+
 router.post(`/webhook/${botService.bot.secretPathComponent()}`, (req, res) => {
   botService.bot.handleUpdate(req.body, res);
 });
 
-module.exports = router;
+export default router;

@@ -1,4 +1,3 @@
-// migrations/XXXXXXXXXXXXXX-create-initial-tables.js
 'use strict';
 
 module.exports = {
@@ -99,7 +98,6 @@ module.exports = {
       }
     });
 
-    // Добавляем индекс для часто используемых полей
     await queryInterface.addIndex('Users', ['telegramId']);
     await queryInterface.addIndex('Polls', ['isActive']);
     await queryInterface.addIndex('Blacklists', ['telegramId']);

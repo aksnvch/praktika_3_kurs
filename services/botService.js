@@ -1,14 +1,16 @@
-const { Telegraf, Markup } = require('telegraf');
-// const rateLimit = require('telegraf-ratelimit');
-const config = require('../config/bot');
-const pollController = require('../controllers/pollController');
-const adminController = require('../controllers/adminController');
-const userController = require('../controllers/userController');
+import { Telegraf, Markup } from 'telegraf';
+import config from '../config/bot.js';
+import pollService from './pollService.js'; 
+import adminService from './adminService.js'; 
+import * as userController from '../controllers/userController.js'; 
 
 //adminPassword: 'admin123'
 
 class BotService {
   constructor() {
+    if (!config.token) {
+      throw new Error('Telegram bot token is not provided in config!');
+    }
     this.bot = new Telegraf(config.token);
     this.pollCreationState = new Map();
     this.pollTypeState = new Map();
@@ -33,7 +35,7 @@ class BotService {
 
   async showStatsMenu(ctx) {
     try {
-      const polls = await pollController.getAllPolls();
+      const polls = await pollService.getAllPolls();
       if (polls.length === 0) {
         return ctx.editMessageText('Нет доступных опросов.', Markup.inlineKeyboard([[Markup.button.callback('🔙 Назад', 'back_to_admin')]])).catch(() => {});
       }
@@ -53,10 +55,9 @@ class BotService {
     }
   }
 
-
   async showDetailedStats(ctx, pollId) {
     try {
-      const stats = await pollController.getPollStats(pollId);
+      const stats = await pollService.getPollStats(pollId);
       if (!stats) return ctx.answerCbQuery('Опрос не найден!', true);
 
       let message = `<b>${stats.type === 'quiz' ? '📝 Викторина' : '📊 Опрос'}: ${stats.question}</b>\n`;
@@ -90,7 +91,7 @@ class BotService {
 
   async showManagementList(ctx) {
     try {
-      const polls = await pollController.getAllPolls();
+      const polls = await pollService.getAllPolls();
       let message = 'Выберите опрос/викторину для управления:';
       const keyboard = [];
 
@@ -115,7 +116,7 @@ class BotService {
 
   async showSinglePollMenu(ctx, pollId) {
     try {
-        const poll = await pollController.getPoll(pollId);
+        const poll = await pollService.getPoll(pollId);
         if (!poll) {
             await ctx.answerCbQuery('Опрос не найден. Возможно, он был удален.', true);
             return this.showManagementList(ctx);
@@ -156,7 +157,7 @@ class BotService {
   }
 
   async showBlacklistedUsers(ctx) {
-    const blacklist = await adminController.getBlacklist();
+    const blacklist = await adminService.getBlacklist();
     let message = 'Заблокированные пользователи:\n\n';
     const keyboard = [];
 
@@ -213,13 +214,13 @@ class BotService {
       const { poll_id, user, option_ids } = ctx.pollAnswer;
       const optionIndex = option_ids[0]; 
 
-      const blacklistedUser = await adminController.checkBlacklist(user.id);
+      const blacklistedUser = await adminService.checkBlacklist(user.id);
       if (blacklistedUser) {
         console.log(`Blocked vote from blacklisted user ${user.id}.`);
         return;
       }
       if (optionIndex !== undefined) {
-        await pollController.recordUserVote(poll_id, user.id, optionIndex);
+        await pollService.recordUserVote(poll_id, user.id, optionIndex);
     }
     });
   }
@@ -237,7 +238,7 @@ class BotService {
 
     this.bot.command('polls', async (ctx) => {
       try {
-        const activePolls = (await pollController.getAllPolls()).filter(p => p.isActive);
+        const activePolls = (await pollService.getAllPolls()).filter(p => p.isActive);
 
         if (activePolls.length === 0) {
           return ctx.reply('На данный момент активных опросов нет.');
@@ -248,7 +249,7 @@ class BotService {
         for (const poll of activePolls) {
           if (poll.chatId && poll.messageId) {
             
-            const userVote = await pollController.checkUserVote(poll.id, ctx.from.id);
+            const userVote = await pollService.checkUserVote(poll.id, ctx.from.id);
             if (userVote) {
               await ctx.reply(`Вы уже отвечали на опрос "${poll.question}". Вот он:`);
             }
@@ -297,13 +298,13 @@ setupActions() {
         const receivedPoll = ctx.poll;
         const pollId = receivedPoll.id.toString();
         
-        const dbPoll = await pollController.getPoll(pollId);
+        const dbPoll = await pollService.getPoll(pollId);
         if (!dbPoll) return;
 
         const votes = receivedPoll.options.map(opt => opt.voter_count || 0);
         const isClosed = receivedPoll.is_closed;
 
-        await pollController.updatePollStats(pollId, votes, isClosed);
+        await pollService.updatePollStats(pollId, votes, isClosed);
         console.log(`Stats for poll ${pollId} updated. Votes: [${votes.join(', ')}], Is Closed: ${isClosed}`);
         
         if (isClosed && dbPoll.isActive) {
@@ -334,7 +335,7 @@ setupActions() {
     this.bot.action(/^stop_poll_(.+)$/, this.isAdmin.bind(this), async (ctx) => {
       const pollId = ctx.match[1];
       try {
-          const poll = await pollController.getPoll(pollId);
+          const poll = await pollService.getPoll(pollId);
           if (!poll) return ctx.answerCbQuery('Опрос не найден в БД.', true);
           if (!poll.isActive) return ctx.answerCbQuery('ℹ️ Опрос уже не активен.', true);
           if (!poll.chatId || !poll.messageId) return ctx.answerCbQuery('❌ Невозможно остановить: старый опрос без данных о чате.', true);
@@ -346,7 +347,7 @@ setupActions() {
           let userMessage = '❌ Ошибка при остановке.';
           if (error.description && error.description.includes('poll has already been closed')) {
               userMessage = 'ℹ️ Опрос уже был остановлен.';
-              await pollController.updatePollStats(pollId, [], true); 
+              await pollService.updatePollStats(pollId, [], true); 
           } else {
               console.error("Error stopping poll:", error);
           }
@@ -368,7 +369,7 @@ setupActions() {
     this.bot.action(/^delete_poll_confirm_(.+)$/, async (ctx) => {
     const pollId = ctx.match[1];
     try {
-        const poll = await pollController.getPoll(pollId);
+        const poll = await pollService.getPoll(pollId);
         if (!poll) return ctx.answerCbQuery('Опрос уже удален.', true);
 
         if (poll.chatId && poll.messageId) {
@@ -377,7 +378,7 @@ setupActions() {
             });
         }
 
-        await pollController.deletePoll(pollId);
+        await pollService.deletePoll(pollId);
         
         await ctx.answerCbQuery('✅ Опрос успешно удален!', true);
         await this.showManagementList(ctx); 
@@ -390,7 +391,7 @@ setupActions() {
 
     this.bot.action(/^edit_poll_prompt_(.+)$/, async (ctx) => {
     const pollId = ctx.match[1];
-    const poll = await pollController.getPoll(pollId);
+    const poll = await pollService.getPoll(pollId);
     if (!poll) return ctx.answerCbQuery('Опрос не найден.', true);
 
     let pollDataString = poll.question;
@@ -447,7 +448,7 @@ setupActions() {
     this.bot.action(/^remove_from_blacklist_(.+)$/, async (ctx) => {
         const telegramId = ctx.match[1];
         try {
-            await adminController.removeFromBlacklist(telegramId);
+            await adminService.removeFromBlacklist(telegramId);
             await ctx.answerCbQuery(`✅ Пользователь ${telegramId} удален из черного списка!`, true);
             await this.showBlacklistedUsers(ctx); 
         } catch (error) {
@@ -493,10 +494,9 @@ setupActions() {
                 throw new Error('Необходимо указать причину блокировки.');
             }
             
-            await adminController.addToBlacklist(telegramId.trim(), reason);
+            await adminService.addToBlacklist(telegramId.trim(), reason);
             await ctx.reply(`✅ Пользователь <code>${telegramId.trim()}</code> добавлен в черный список.`, { parse_mode: 'HTML' });
             
-            // Возвращаемся в меню черного списка
             const keyboard = Markup.inlineKeyboard([[Markup.button.callback('Вернуться в меню ЧС', 'manage_blacklist')]]);
             await ctx.reply('Что дальше?', keyboard);
 
@@ -512,24 +512,18 @@ setupActions() {
         this.pollEditingState.delete(userId);
 
     try {
-        // 1. Получаем старый опрос для удаления И для получения chatId
-        const oldPoll = await pollController.getPoll(pollIdToEdit);
+        const oldPoll = await pollService.getPoll(pollIdToEdit);
         if (!oldPoll) throw new Error('Исходный опрос для редактирования не найден.');
 
-        // 2. Парсим новые данные из сообщения
         const { question, options, pollConfig, pollType } = this.parsePollData(ctx.message.text, oldPoll.type);
 
-        // 3. Удаляем старое сообщение
         await ctx.telegram.deleteMessage(oldPoll.chatId, oldPoll.messageId).catch(err => console.warn(`Could not delete old poll message: ${err.message}`));
         
-        // 4. Удаляем старую запись из БД
-        await pollController.deletePoll(oldPoll.id);
+        await pollService.deletePoll(oldPoll.id);
 
-        // 5. Создаем новый опрос, используя chatId от СТАРОГО опроса
         const sentMessage = await ctx.telegram.sendPoll(oldPoll.chatId, question, options, pollConfig);
         
-        // 6. Сохраняем новый опрос в БД
-        await pollController.createPoll(
+        await pollService.createPoll(
             sentMessage.poll.id, question, options, pollType,
             pollConfig.correct_option_id, sentMessage.chat.id, sentMessage.message_id
         );
@@ -552,7 +546,7 @@ setupActions() {
 
           const sentMessage = await ctx.telegram.sendPoll(ctx.chat.id, question, options, pollConfig);
 
-          await pollController.createPoll(
+          await pollService.createPoll(
               sentMessage.poll.id, question, options, pollType,
               pollConfig.correct_option_id, sentMessage.chat.id, sentMessage.message_id
           );
@@ -602,4 +596,5 @@ setupActions() {
   }
 }
 
-module.exports = new BotService();
+const botServiceInstance = new BotService();
+export default botServiceInstance;
