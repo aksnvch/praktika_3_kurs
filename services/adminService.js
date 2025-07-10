@@ -5,16 +5,17 @@ class adminService {
     return Blacklist.findAll();
   }
 
-  addToBlacklist(telegramId, reason) {
-    return Blacklist.findOrCreate({
+   async addToBlacklist(telegramId, reason) {
+    const [user, created] = await Blacklist.findOrCreate({
       where: { telegramId: String(telegramId) },
       defaults: { reason }
-    }).then(([user, created]) => {
-      if (!created) {
-        return user.update({ reason });
-      }
-      return user;
     });
+
+    if (!created && user.reason !== reason) {
+      await user.update({ reason });
+    }
+
+    return { user, created };
   }
 
   async removeFromBlacklist(telegramId) {

@@ -1,4 +1,4 @@
-import { Poll, Vote } from '../models/index.js';
+import { Poll, Option, Vote, PollMapping, sequelize  } from '../models/index.js';
 
 class ApiError extends Error {
   constructor(statusCode, message) {
@@ -8,46 +8,92 @@ class ApiError extends Error {
 }
 
 class pollService {
-  createPoll(telegramPollId, question, options, type, correctOption, chatId, messageId) {
-    console.log(`Poll ${telegramPollId} saving to DB from chat ${chatId}.`);
-    return Poll.create({
-      id: String(telegramPollId),
-      question,
-      options: options.reduce((acc, text, index) => ({ ...acc, [index]: { text, votes: 0 } }), {}),
-      type,
-      correctOption,
-      isActive: true,
-      chatId: String(chatId),
-      messageId: String(messageId),
-    });
+  async createPoll(telegramPollId, question, optionsText, type, correctOption, chatId, messageId) {
+    const t = await sequelize.transaction(); 
+    try {
+      const poll = await Poll.create({
+        id: String(telegramPollId),
+        question,
+        type,
+        correctOption,
+        isActive: true,
+        chatId: String(chatId),
+        messageId: String(messageId)
+      }, { transaction: t });
+
+      const optionsToCreate = optionsText.map((text, index) => ({
+        text,
+        pollId: poll.id,
+        position: index
+      }));
+      await Option.bulkCreate(optionsToCreate, { transaction: t });
+
+      await t.commit();
+      
+      return this.getPoll(poll.id);
+
+    } catch (error) {
+      await t.rollback();
+      console.error('Poll creation failed, transaction rolled back.', error);
+      throw error;
+    }
   }
 
   getAllPolls() {
     return Poll.findAll({ order: [['createdAt', 'DESC']] });
   }
 
-  async getPoll(id) {
-    const poll = await Poll.findByPk(String(id));
-    if (!poll) {
-      throw new ApiError(404, 'Poll not found');
-    }
-    return poll;
+  getPoll(id) {
+    return Poll.findByPk(String(id), {
+      include: [{
+        model: Option,
+        as: 'options', 
+      }],
+      order: [
+        [{ model: Option, as: 'options' }, 'position', 'ASC'] 
+      ]
+    });
   }
+
 
   async getPollStats(id) {
-    const poll = await this.getPoll(id); 
-    
-    const optionsArray = Object.values(poll.options).map((value, index) => ({
-      index, text: value.text, votes: value.votes || 0,
-    }));
-    const totalVotes = optionsArray.reduce((sum, opt) => sum + opt.votes, 0);
+        const poll = await this.getPoll(id); 
+        if (!poll) {
+            throw new ApiError(404, 'Poll not found');
+        }
 
-    return {
-      question: poll.question, options: optionsArray, totalVotes,
-      type: poll.type, isActive: poll.isActive, correctOption: poll.correctOption
-    };
-  }
-  
+        const voteCounts = await Vote.findAll({
+            attributes: [
+                'optionId',
+                [sequelize.fn('COUNT', sequelize.col('optionId')), 'voteCount']
+            ],
+            where: { pollId: id },
+            group: ['optionId']
+        });
+
+        const votesMap = voteCounts.reduce((acc, item) => {
+            acc[item.optionId] = parseInt(item.getDataValue('voteCount'), 10);
+            return acc;
+        }, {});
+        
+        const optionsWithVotes = poll.options.map(option => ({
+            index: option.position,
+            text: option.text,
+            votes: votesMap[option.id] || 0 
+        }));
+
+        const totalVotes = Object.values(votesMap).reduce((sum, count) => sum + count, 0);
+
+        return {
+            question: poll.question,
+            options: optionsWithVotes,
+            totalVotes,
+            type: poll.type,
+            isActive: poll.isActive,
+            correctOption: poll.correctOption
+        };
+    }
+
   async updatePoll(id, data) {
     const poll = await this.getPoll(id); 
     return poll.update(data);
@@ -59,69 +105,99 @@ class pollService {
     return true;
   }
 
-  async updatePollStats(pollId, votes, isClosed = false) {
-    const poll = await this.getPoll(pollId);
-    if (!poll) {
-      console.log(`[updatePollStats] Poll ${pollId} not found in DB. Skipping.`);
-      return;
-    }
-
-    let optionsChanged = false;
-    let statusChanged = false;
-
-    if (votes && votes.length > 0) {
-      const currentOptions = poll.get('options', { plain: true });
-      votes.forEach((count, index) => {
-        if (currentOptions[index] && currentOptions[index].votes !== count) {
-          currentOptions[index].votes = count;
-          optionsChanged = true;
-        }
-      });
-      if (optionsChanged) {
-        poll.options = currentOptions;
-      }
-    }
-
-    if (isClosed && poll.isActive) {
-      poll.isActive = false;
-      statusChanged = true;
-    }
-    
-    if (optionsChanged || statusChanged) {
-      if (optionsChanged) {
-        poll.changed('options', true);
-      }
-      await poll.save();
-      console.log(`[SAVED] Stats for poll ${pollId}. Options changed: ${optionsChanged}, Status changed: ${statusChanged}`);
-    }
-  }
-
-  async recordUserVote(pollId, userId, optionIndex) {
+  async updateOptionVotes(pollId, voteCounts) {
+    const t = await sequelize.transaction();
     try {
-      const [vote, created] = await Vote.findOrCreate({
-        where: { pollId: String(pollId), userId: String(userId) },
-        defaults: { optionIndex }
+      const options = await Option.findAll({
+        where: { pollId: String(pollId) },
+        order: [['position', 'ASC']],
+        transaction: t
       });
-      if (!created) {
-        await vote.update({ optionIndex });
-        console.log(`User ${userId} changed vote in poll ${pollId} to option ${optionIndex}.`);
-      } else {
-        console.log(`User ${userId} voted in poll ${pollId} for option ${optionIndex}.`);
+
+      if (options.length !== voteCounts.length) {
+        throw new Error('Mismatch between options count in DB and vote counts from Telegram.');
       }
-      return vote;
+      
+      const updatePromises = options.map((option, index) => {
+        return option.update({ votes: voteCounts[index] }, { transaction: t });
+      });
+
+      await Promise.all(updatePromises);
+
+      await t.commit();
+      console.log(`Votes for poll ${pollId} updated successfully.`);
+      
     } catch (error) {
-      if (error.name === 'SequelizeUniqueConstraintError') {
-        console.log(`Duplicate vote attempt by user ${userId} for poll ${pollId}. Ignored.`);
-        return null;
-      }
-      console.error('Error recording vote:', error);
+      await t.rollback();
+      console.error(`Failed to update votes for poll ${pollId}:`, error);
       throw error;
     }
   }
 
+   async recordUserVote(pollId, userId, optionIndex) {
+    const option = await Option.findOne({
+      where: {
+        pollId: String(pollId),
+        position: optionIndex
+      }
+    });
+
+    if (!option) {
+      console.error(`Could not find option with position ${optionIndex} for poll ${pollId}`);
+      throw new Error('Invalid option for this poll');
+    }
+
+    const [vote, created] = await Vote.findOrCreate({
+      where: {
+        userId: String(userId),
+        pollId: String(pollId)
+      },
+      defaults: {
+        optionId: option.id
+      }
+    });
+
+    if (!created) {
+      await vote.update({ optionId: option.id });
+    }
+    
+    return vote;
+  }
+
+
   checkUserVote(pollId, userId) {
     return Vote.findOne({
       where: { pollId: String(pollId), userId: String(userId) }
+    });
+  }
+
+  findPollByQuestion(question) {
+    return Poll.findOne({
+      where: {
+        question,
+        isActive: true
+      }
+    });
+  }
+
+  async findPollByTelegramId(telegramPollId) {
+    return Poll.findByPk(String(telegramPollId));
+  }
+
+  createPollMapping(telegramPollId, internalPollId) {
+    return PollMapping.create({ telegramPollId, internalPollId });
+  }
+
+  async findInternalPollId(telegramPollId) {
+    const mapping = await PollMapping.findByPk(String(telegramPollId));
+    return mapping ? mapping.internalPollId : null;
+  }
+
+   getAllVotesForPoll(pollId) {
+    return Vote.findAll({
+      where: {
+        pollId: String(pollId)
+      }
     });
   }
 }

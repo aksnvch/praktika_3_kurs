@@ -10,14 +10,23 @@ class AdminController {
         }
     }
 
-    async addToBlacklist(req, res, next) {
+     async addToBlacklist(req, res, next) {
         try {
-            const { telegramId, reason } = req.body;
-            if (!telegramId || !reason) {
-                return res.status(400).json({ message: 'Telegram ID and reason are required' });
+            if (!req.body) {
+                return res.status(400).json({ message: 'Request body is missing' });
             }
-            const [user, created] = await adminService.addToBlacklist(telegramId, reason);
-            return res.status(created ? 201 : 200).json(user); 
+
+            const { telegramId, reason } = req.body;
+            
+            if (!telegramId || !reason) {
+                return res.status(400).json({ message: 'Fields "telegramId" and "reason" are required in the request body' });
+            }
+            
+            const reasonString = typeof reason === 'string' ? reason : JSON.stringify(reason);
+
+        const { user, created } = await adminService.addToBlacklist(telegramId, reasonString); // <-- передаем строку
+
+        return res.status(created ? 201 : 200).json(user);
         } catch (error) {
             next(error);
         }

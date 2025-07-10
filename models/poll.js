@@ -2,15 +2,15 @@ import { Model, DataTypes } from 'sequelize';
 
 export default class Poll extends Model {
   static associate(models) {
-    this.hasMany(models.Vote, { foreignKey: 'pollId', onDelete: 'CASCADE' });
+    this.hasMany(models.Option, { as: 'options', foreignKey: 'pollId' }); 
+    this.hasMany(models.Vote, { foreignKey: 'pollId' });
   }
 }
 
 export const initPollModel = (sequelize) => {
   Poll.init({
     id: { type: DataTypes.STRING, primaryKey: true },
-    question: { type: DataTypes.STRING, allowNull: false },
-    options: { type: DataTypes.JSONB, allowNull: false, defaultValue: {} },
+    question: { type: DataTypes.TEXT, allowNull: false },
     type: { type: DataTypes.ENUM('anonymous', 'quiz'), allowNull: false, defaultValue: 'anonymous' },
     correctOption: { type: DataTypes.INTEGER, allowNull: true },
     isActive: { type: DataTypes.BOOLEAN, defaultValue: true },

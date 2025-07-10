@@ -1,10 +1,11 @@
 import { Telegraf, Markup } from 'telegraf';
 import config from '../config/bot.js';
-import pollService from './pollService.js'; 
-import adminService from './adminService.js'; 
-import * as userController from '../controllers/userController.js'; 
+import pollService from './pollService.js';
+import adminService from './adminService.js';
+import * as userController from '../controllers/userController.js';
 
 //adminPassword: 'admin123'
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 class BotService {
   constructor() {
@@ -16,18 +17,19 @@ class BotService {
     this.pollTypeState = new Map();
     this.pollEditingState = new Map();
     this.blacklistState = new Map();
-    this.adminLoginState = new Map(); 
+    this.adminLoginState = new Map();
     this.authorizedAdmins = new Set();
     this.userRequestTimestamps = new Map();
 
     this.setupMiddlewares();
     this.setupCommands();
     this.setupActions();
+    this.setupEventHandlers();
   }
 
   async isAdmin(ctx, next) {
     if (this.authorizedAdmins.has(ctx.from.id)) {
-      return next(); 
+      return next();
     }
     await ctx.answerCbQuery('⛔️ Доступ запрещен. Пожалуйста, войдите через /admin.', true);
     return;
@@ -135,7 +137,7 @@ class BotService {
             keyboard.push([Markup.button.callback('🗑️ Удалить из БД', `delete_poll_prompt_${poll.id}`)]);
             message += '\n\n<i>Опрос уже остановлен. Вы можете только удалить его из базы.</i>'
         }
-        
+
         keyboard.push([Markup.button.callback('🔙 К списку', 'manage_polls_list')]);
 
         await ctx.editMessageText(message, {
@@ -181,10 +183,10 @@ class BotService {
     }).catch(()=>{});
   }
 
-  setupMiddlewares() {    
+  setupMiddlewares() {
     this.bot.use(async (ctx, next) => {
       if (!ctx.from || !ctx.from.id) {
-        return next(); 
+        return next();
       };
 
       const userId = ctx.from.id;
@@ -209,25 +211,41 @@ class BotService {
       }
       return next();
     });
-  
-    this.bot.on('poll_answer', async (ctx) => {
-      const { poll_id, user, option_ids } = ctx.pollAnswer;
-      const optionIndex = option_ids[0]; 
 
-      const blacklistedUser = await adminService.checkBlacklist(user.id);
-      if (blacklistedUser) {
-        console.log(`Blocked vote from blacklisted user ${user.id}.`);
-        return;
+this.bot.on('poll_answer', async (ctx) => {
+      try {
+        const { poll_id, user, option_ids } = ctx.pollAnswer;
+        const optionIndex = option_ids[0];
+
+        if (optionIndex === undefined) return;
+
+        let pollIdInDb = poll_id; 
+
+        if (this.pollIdMap.has(pollIdInDb)) {
+          pollIdInDb = this.pollIdMap.get(pollIdInDb);
+          console.log(`Answer: Found mapping for TG poll ${poll_id}. Using DB ID ${pollIdInDb}`);
+        }
+
+        const dbPoll = await pollService.getPoll(pollIdInDb);
+        if (!dbPoll) {
+          console.warn(`Answer: Poll with ID ${pollIdInDb} not found in DB. Vote from user ${user.id} was not recorded.`);
+          return;
+        }
+
+        await pollService.recordUserVote(dbPoll.id, user.id, optionIndex);
+        console.log(`Vote from user ${user.id} for poll ${dbPoll.id} recorded.`);
+
+      } catch (error) {
+        console.error('Error processing poll_answer:', error);
       }
-      if (optionIndex !== undefined) {
-        await pollService.recordUserVote(poll_id, user.id, optionIndex);
-    }
     });
   }
 
+
+
   setupCommands() {
     this.bot.command('start', (ctx) => ctx.reply('Привет! Отправь /polls для просмотра активных опросов и викторин.'));
-    
+
     this.bot.command('admin', async (ctx) => {
       if (this.authorizedAdmins.has(ctx.from.id)) {
           return this.showMainMenu(ctx);
@@ -236,43 +254,22 @@ class BotService {
       await ctx.reply('🔑 Пожалуйста, введите пароль для доступа к админ-панели:');
   });
 
-    this.bot.command('polls', async (ctx) => {
+     this.bot.command('polls', async (ctx) => {
       try {
         const activePolls = (await pollService.getAllPolls()).filter(p => p.isActive);
-
-        if (activePolls.length === 0) {
-          return ctx.reply('На данный момент активных опросов нет.');
-        }
-
-        await ctx.reply(`Доступно для голосования: ${activePolls.length} опросов/викторин.`);
-
+        if (activePolls.length === 0) return ctx.reply('Активных опросов нет.');
+        
+        await ctx.reply(`Доступно для голосования: ${activePolls.length} опросов.`);
+        
         for (const poll of activePolls) {
-          if (poll.chatId && poll.messageId) {
-            
-            const userVote = await pollService.checkUserVote(poll.id, ctx.from.id);
-            if (userVote) {
-              await ctx.reply(`Вы уже отвечали на опрос "${poll.question}". Вот он:`);
-            }
-            
+          try {
             await ctx.telegram.forwardMessage(ctx.chat.id, poll.chatId, poll.messageId);
-
-          } else {
-            console.warn(`Poll ${poll.id} has no messageId. Sending as new.`);
-            const options = Object.values(poll.options).map(o => o.text);
-            const pollConfig = { is_anonymous: true };
-            if (poll.type === 'quiz') {
-                pollConfig.type = 'quiz';
-                pollConfig.correct_option_id = poll.correctOption;
-            } else {
-                pollConfig.type = 'regular';
-            }
-            await ctx.telegram.sendPoll(ctx.chat.id, poll.question, options, pollConfig);
+          } catch (e) {
+            console.error(`Failed to forward poll ${poll.id}:`, e.message);
           }
         }
-
       } catch (error) {
-          console.error("Error in /polls command:", error);
-          await ctx.reply('Произошла ошибка при загрузке опросов.');
+        console.error("Error in /polls command:", error);
       }
     });
   }
@@ -282,7 +279,7 @@ class BotService {
     const keyboard = Markup.inlineKeyboard([
       [Markup.button.callback('Создать анонимный опрос', 'create_anonymous_poll'), Markup.button.callback('Создать викторину', 'create_quiz')],
       [Markup.button.callback('Управление опросами', 'manage_polls_list')],
-      [Markup.button.callback('Показать статистику', 'show_stats_menu'), 
+      [Markup.button.callback('Показать статистику', 'show_stats_menu'),
       Markup.button.callback('🚫 Черный список', 'manage_blacklist')]
     ]);
     if (ctx.callbackQuery) {
@@ -297,16 +294,16 @@ setupActions() {
       try {
         const receivedPoll = ctx.poll;
         const pollId = receivedPoll.id.toString();
-        
+
         const dbPoll = await pollService.getPoll(pollId);
         if (!dbPoll) return;
 
         const votes = receivedPoll.options.map(opt => opt.voter_count || 0);
         const isClosed = receivedPoll.is_closed;
 
-        await pollService.updatePollStats(pollId, votes, isClosed);
+        await pollService.updateOptionVotes(pollId, votes, isClosed);
         console.log(`Stats for poll ${pollId} updated. Votes: [${votes.join(', ')}], Is Closed: ${isClosed}`);
-        
+
         if (isClosed && dbPoll.isActive) {
           await this.bot.telegram.sendMessage(config.userId, `📊 Опрос "${receivedPoll.question.substring(0, 50)}..." был остановлен. Финальная статистика сохранена.`);
         }
@@ -316,16 +313,16 @@ setupActions() {
     });
 
     // Навигация
-    this.bot.action('back_to_admin', this.isAdmin.bind(this), (ctx) => { 
-      this.showMainMenu(ctx); 
-      ctx.answerCbQuery(); 
+    this.bot.action('back_to_admin', this.isAdmin.bind(this), (ctx) => {
+      this.showMainMenu(ctx);
+      ctx.answerCbQuery();
     });
-    this.bot.action('manage_polls_list', this.isAdmin.bind(this), async (ctx) => { 
-        await this.showManagementList(ctx); 
-        await ctx.answerCbQuery(); 
+    this.bot.action('manage_polls_list', this.isAdmin.bind(this), async (ctx) => {
+        await this.showManagementList(ctx);
+        await ctx.answerCbQuery();
     });
 
-    
+
     // Управление
     this.bot.action(/^manage_poll_(.+)$/, this.isAdmin.bind(this), async (ctx) => {
       await this.showSinglePollMenu(ctx, ctx.match[1]);
@@ -340,14 +337,14 @@ setupActions() {
           if (!poll.isActive) return ctx.answerCbQuery('ℹ️ Опрос уже не активен.', true);
           if (!poll.chatId || !poll.messageId) return ctx.answerCbQuery('❌ Невозможно остановить: старый опрос без данных о чате.', true);
 
-          await ctx.telegram.stopPoll(poll.chatId, poll.messageId); 
+          await ctx.telegram.stopPoll(poll.chatId, poll.messageId);
           await ctx.answerCbQuery('✅ Команда на остановку отправлена!', true);
-          await this.showSinglePollMenu(ctx, pollId); 
+          await this.showSinglePollMenu(ctx, pollId);
       } catch (error) {
           let userMessage = '❌ Ошибка при остановке.';
           if (error.description && error.description.includes('poll has already been closed')) {
               userMessage = 'ℹ️ Опрос уже был остановлен.';
-              await pollService.updatePollStats(pollId, [], true); 
+              await pollService.updatePollStats(pollId, [], true);
           } else {
               console.error("Error stopping poll:", error);
           }
@@ -379,9 +376,9 @@ setupActions() {
         }
 
         await pollService.deletePoll(pollId);
-        
+
         await ctx.answerCbQuery('✅ Опрос успешно удален!', true);
-        await this.showManagementList(ctx); 
+        await this.showManagementList(ctx);
 
     } catch (error) {
         console.error('Error in delete_poll_confirm:', error);
@@ -433,12 +430,12 @@ setupActions() {
       await this.showBlacklistMenu(ctx);
       await ctx.answerCbQuery();
     });
-  
+
     this.bot.action('show_blacklist_users', async (ctx) => {
         await this.showBlacklistedUsers(ctx);
         await ctx.answerCbQuery();
     });
-  
+
     this.bot.action('add_to_blacklist_prompt', async (ctx) => {
         this.blacklistState.set(ctx.from.id, true);
         await ctx.editMessageText('Отправьте ID пользователя и причину бана через "|".\n\n*Пример:*\n`123456789|Спам`', { parse_mode: 'Markdown' });
@@ -450,7 +447,7 @@ setupActions() {
         try {
             await adminService.removeFromBlacklist(telegramId);
             await ctx.answerCbQuery(`✅ Пользователь ${telegramId} удален из черного списка!`, true);
-            await this.showBlacklistedUsers(ctx); 
+            await this.showBlacklistedUsers(ctx);
         } catch (error) {
             console.error('Error removing from blacklist:', error);
             await ctx.answerCbQuery('❌ Ошибка при удалении.', true);
@@ -459,13 +456,12 @@ setupActions() {
 
     this.bot.on('text', async (ctx) => {
       const userId  = ctx.from.id;
-      
+
        // СЦЕНАРИЙ -1: ВВОД ПАРОЛЯ
     if (this.adminLoginState.has(userId)) {
       this.adminLoginState.delete(userId);
       const enteredPassword = ctx.message.text;
 
-      // Стираем сообщение с паролем для безопасности
       ctx.deleteMessage().catch(() => {});
 
       if (enteredPassword === config.adminPassword) {
@@ -493,10 +489,10 @@ setupActions() {
             if (!reason) {
                 throw new Error('Необходимо указать причину блокировки.');
             }
-            
+
             await adminService.addToBlacklist(telegramId.trim(), reason);
             await ctx.reply(`✅ Пользователь <code>${telegramId.trim()}</code> добавлен в черный список.`, { parse_mode: 'HTML' });
-            
+
             const keyboard = Markup.inlineKeyboard([[Markup.button.callback('Вернуться в меню ЧС', 'manage_blacklist')]]);
             await ctx.reply('Что дальше?', keyboard);
 
@@ -518,11 +514,11 @@ setupActions() {
         const { question, options, pollConfig, pollType } = this.parsePollData(ctx.message.text, oldPoll.type);
 
         await ctx.telegram.deleteMessage(oldPoll.chatId, oldPoll.messageId).catch(err => console.warn(`Could not delete old poll message: ${err.message}`));
-        
+
         await pollService.deletePoll(oldPoll.id);
 
         const sentMessage = await ctx.telegram.sendPoll(oldPoll.chatId, question, options, pollConfig);
-        
+
         await pollService.createPoll(
             sentMessage.poll.id, question, options, pollType,
             pollConfig.correct_option_id, sentMessage.chat.id, sentMessage.message_id
@@ -558,6 +554,84 @@ setupActions() {
     }
   });
   }
+
+setupEventHandlers() {
+ this.bot.on('poll', async (ctx) => {
+      try {
+        const receivedPoll = ctx.poll;
+        const pollId = receivedPoll.id.toString();
+
+        const dbPoll = await pollService.getPoll(pollId);
+        if (!dbPoll) {
+          console.warn(`[EVENT: poll] Received update for a poll (ID: ${pollId}) that is not in our database. Ignoring.`);
+          return;
+        }
+
+        const voteCounts = receivedPoll.options.map(opt => opt.voter_count);
+        
+        await pollService.updateOptionVotes(pollId, voteCounts);
+
+        if (receivedPoll.is_closed && dbPoll.isActive) {
+          await dbPoll.update({ isActive: false });
+        }
+
+      } catch (error) {
+        console.error('Error processing "poll" event:', error);
+      }
+    });
+  }
+
+   async createPollAndSave({ question, options, type, correctOption, targetChatId }) {
+    try {
+      const pollConfig = { is_anonymous: true };
+      if (type === 'quiz') {
+        pollConfig.type = 'quiz';
+        pollConfig.correct_option_id = correctOption;
+      }
+      const safeOptions = options.map(opt => String(opt).substring(0, 100));
+
+       const sentMessage = await this.bot.telegram.sendPoll(
+        targetChatId,
+        question,
+        safeOptions,
+        pollConfig
+      );
+      const realPollId = sentMessage.poll.id;
+      const realChatId = sentMessage.chat.id;
+      const realMessageId = sentMessage.message_id;
+
+      console.log(`[CREATE] Received REAL poll ID from Telegram: ${realPollId}`);
+
+      const dbPoll = await pollService.createPoll(
+        realPollId,
+        question,
+        options,
+        type,
+        correctOption,
+        realChatId,
+        realMessageId
+      );
+
+      console.log(`[CREATE] Successfully saved poll to DB with ID: ${dbPoll.id}`);
+      return dbPoll;
+
+    } catch (error) {
+      console.error('[CREATE] CRITICAL ERROR during poll creation:', error);
+      throw error;
+    }
+  }
+
+  async sendOneTimePoll({ chatId, question, options }) {
+    try {
+      const safeOptions = options.map(opt => String(opt).substring(0, 100));
+      await this.bot.telegram.sendPoll(chatId, question, safeOptions, { is_anonymous: true });
+      return true;
+    } catch (error) {
+      console.error(`Failed to send one-time poll to chat ${chatId}:`, error);
+      throw new Error('Failed to send poll via Telegram Bot.');
+    }
+  }
+
 
   parsePollData(text, pollType) {
     const parts = text.split('|').map(s => s.trim());
